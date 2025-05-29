@@ -10,12 +10,67 @@
 unsigned short opcode;
 unsigned char memory[MEMORY_SIZE];
 unsigned short stack[16];
+unsigned char font[80] = {0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+                          0x20, 0x60, 0x20, 0x20, 0x70, // 1
+                          0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+                          0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+                          0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+                          0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+                          0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+                          0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+                          0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+                          0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+                          0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+                          0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+                          0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+                          0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+                          0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+                          0xF0, 0x80, 0xF0, 0x80, 0x80}; // F
+
 unsigned short I;
 unsigned char V[16];
-unsigned char display[64 * 32];
+unsigned char display[32][64];
+unsigned char keypad[16];
+unsigned char dis_updated = 0;
 unsigned short pc;
 unsigned short sp;
 unsigned char delay_timer, sound_timer;
+
+void execute_DXYN(unsigned char X, unsigned char Y, unsigned char N) {
+    unsigned char Vx = V[X] % 64;
+    unsigned char Vy = V[Y] % 32;
+    V[CF] = 0;
+
+    for (int row = 0; row < N; ++row) {
+        unsigned char sprite_byte = memory[I + row];
+
+        for (int col = 0; col < 8; ++col) {
+            if (sprite_byte & (0x80 >> col)) {
+                int x = (Vx + col) % 64;
+                int y = (Vy + row) % 32;
+
+                if (display[y][x] == 1)
+                    V[CF] = 1;
+
+                display[y][x] ^= 1;
+            }
+        }
+    }
+
+    dis_updated = 1;
+}
+
+void render_screen() {
+    //system("clear");
+    printf("\033[H");
+
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            printf("%s", display[y][x] ? "##" : "  ");
+        }
+        putchar('\n');
+    }
+}
 
 void load_rom(char *name) {
     FILE *ROM = fopen(name, "rb");
@@ -34,19 +89,15 @@ void init() {
     sound_timer = 0;
     pc = 0x200;
     memset(memory, 0, MEMORY_SIZE);
-    memset(display, 0, 64 * 32);
+    memset(display, 0, sizeof(display));
     memset(stack, 0, 16);
     memset(V, 0, 16);
+    memset(keypad, 0, 16);
+    memcpy(&memory[0x50], font, 80);
 }
 
 void test() {
-    unsigned char program[] = {0xF2, 0x07,
-			                   0xC3, 0xFF,
-			                   0xF3, 0x15,
-			                   0xF3, 0x18,
-			                   0xC0, 0xFF,
-			                   0xC1, 0xFF,
-			                   0xF3, 0x55};
+    unsigned char program[] = {0x80, 0x1E};
     memcpy(memory + 0x200, program, sizeof(program));
 }
 
@@ -67,6 +118,7 @@ void execute(FILE *log) {
         case 0x0000:
             if (opcode == 0x00E0) {
                 memset(display, 0, sizeof(display));
+                dis_updated = 1;
                 fprintf(log, "[Clear screen]\n\n");
             } else if (opcode == 0x0000) {
                 unsigned short address = opcode & 0x0FFF;
@@ -168,6 +220,10 @@ void execute(FILE *log) {
                     V[X] = V[Y] - V[X];
                     fprintf(log, "[Set register V%01X to the value of V%01X minus V%01X]\n\n", X, Y, X);
                     break;
+                case 0x800E:
+                    V[X] = V[Y] << 1;
+                    V[CF] = (V[Y] >> 7) & 1;
+                    break;
             }
             pc += 2;
             break;
@@ -201,13 +257,6 @@ void execute(FILE *log) {
                     I += V[X];
                     fprintf(log, "[Add value stored in V[%d] to I]\n\n", V[X]);
                     break;
-                case 0xF055:
-                    for (int i = 0; i < X; ++i)
-                        memory[I + i] = V[i];
-                    I += (X + 1);
-                    fprintf(log, "[Store the values of registers V0 to V%d inclusive in memory starting at address I]\n\n", X);
-                    printf("I = %d\n", I);
-                    break;
                 case 0xF007:
                     V[X] = delay_timer;
                     fprintf(log, "[Store the current value of the delay timer(%d) in V%d]\n\n", delay_timer, X);
@@ -220,8 +269,43 @@ void execute(FILE *log) {
                     fprintf(log, "[Set the sound timer to the value of register V%d(value is %d)]\n\n", X, V[X]);
                     sound_timer = V[X];
                     break;
+                case 0xF055:
+                    for (int i = 0; i <= X; ++i)
+                        memory[I + i] = V[i];
+                    I += (X + 1);
+                    fprintf(log, "[Store the values of registers V0 to V%d inclusive in memory starting at address 0x%04X]\n\n", X, I);
+                    break;
+                case 0xF065:
+                    for (int i = 0; i <= X; ++i)
+                        V[i] = memory[I + i];
+                    fprintf(log, "[Fill registers V0 to V%d inclusive with the values stored in memory starting at address 0x%04X]\n\n", X, I);
+                    I += (X + 1);
+                    break;
             }
             pc += 2;
+            break;
+        case 0xD000:
+            unsigned char N = opcode & 0x000F;
+            execute_DXYN(X, Y, N);
+            fprintf(log, "[DXYN: x=%d, y=%d, I=0x%X, N=%d, byte=0x%02X]\n\n", V[X], V[Y], I, N, memory[I]);
+            pc += 2;
+            break;
+        case 0xE000:
+            X = (opcode & 0x0F00) >> 8;
+            switch (opcode & 0xF0FF) {
+                case 0xE09E:
+                    if (keypad[V[X]] == 1)
+                        pc += 4;
+                    else 
+                        pc += 2;
+                    break;
+                case 0xE0A1:
+                    if (keypad[V[X]] == 0)
+                        pc += 4;
+                    else 
+                        pc += 2;
+                    break;
+            }
             break;
         default:
             fprintf(log, "[unknown opcode : [0x%X]]\n\n", opcode);
