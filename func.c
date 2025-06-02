@@ -122,7 +122,8 @@ void execute(FILE *log) {
             } else if (opcode == 0x0000) {
                 unsigned short address = opcode & 0x0FFF;
                 fprintf(log, "Warning: Machine code call at 0x%03X (unsupported in emulators)\n\n", address);
-            }
+            } else if (opcode == 0x00EE)
+                return stack[sp];
             pc += 2;
             break;
         case 0x1000:
