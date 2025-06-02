@@ -92,7 +92,6 @@ void init() {
     memset(display, 0, sizeof(display));
     memset(stack, 0, 16);
     memset(V, 0, 16);
-    memset(keypad, 0, 16);
     memcpy(&memory[0x50], font, 80);
 }
 
